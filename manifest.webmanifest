@@ -1,6 +1,6 @@
 {
- "name": "In-house Products Order – Old Town Falafel",
- "short_name": "OTF Orders",
+ "name": "طلب بضاعة من المخازن",
+ "short_name": "طلب بضاعة من المخازن",
  "lang": "ar",
  "dir": "rtl",
  "start_url": "./",
