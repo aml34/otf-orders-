@@ -315,6 +315,13 @@ try{ const c = JSON.parse(store.get("otf.carts")||"null"); if(c){ Object.keys(DE
 state.nums = Object.fromEntries(Object.keys(DEPTS).map(k=>[k,null]));
 try{ const nm = JSON.parse(store.get("otf.nums")||"null"); if(nm){ Object.keys(DEPTS).forEach(k=>{ if(nm[k]) state.nums[k]=nm[k] }) } }catch(e){}
 function saveNums(){ store.set("otf.nums", JSON.stringify(state.nums)) }
+/* one-time counter reset: every device starts numbering again from 0001 */
+const COUNTER_RESET = "2026-11-04";
+if(store.get("otf.reset") !== COUNTER_RESET){
+  store.set("otf.localSeq","0");
+  Object.keys(state.nums).forEach(k=>state.nums[k]=null); saveNums();
+  store.set("otf.reset", COUNTER_RESET);
+}
 Object.keys(state.nums).forEach(d=>{ const h=state.nums[d]; if(h && h.sent){ state.carts[d]=[]; state.nums[d]=null } });
 try{ store.set("otf.carts", JSON.stringify(state.carts)); saveNums() }catch(e){}
 /* any change to an order that was already sent turns it into a new order: it gets a new number */
