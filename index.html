@@ -478,6 +478,24 @@ async function nextSharedNo(db){
   throw new Error("counter busy");
 }
 function chefCode(){ const w = (state.chef[state.dept]||"XX").split(/\s+/).filter(Boolean); return (w.length>1 ? w[0][0]+w[1][0] : w[0].slice(0,2)).toUpperCase() }
+/* ---------- Google Sheet order log (used outside Claude) ---------- */
+const SHEET_URL = "https://script.google.com/macros/s/AKfycbxZB7gYyoLgQj34nDboCdzmSU-SUFiTJYGfs4EprZSdorimMXgqnJ5KzwIGwM5wCP7M/exec";
+const useSheet = () => !!SHEET_URL && !(window.claude && window.claude.use);
+async function sheetCall(body){
+  const res = await fetch(SHEET_URL, {method:"POST", body:JSON.stringify(body)});
+  const j = await res.json();
+  if(!j || !j.ok) throw new Error((j && j.error) || "sheet error");
+  return j;
+}
+/* calls that failed (no internet) wait here and are sent later */
+function queuePending(body){ try{ const q = JSON.parse(store.get("otf.pending")||"[]"); q.push(body); store.set("otf.pending", JSON.stringify(q)) }catch(e){} }
+async function flushPending(){
+  if(!useSheet()) return;
+  let q; try{ q = JSON.parse(store.get("otf.pending")||"[]") }catch(e){ q = [] }
+  while(q.length){
+    try{ await sheetCall(q[0]); q.shift(); store.set("otf.pending", JSON.stringify(q)) }catch(e){ break }
+  }
+}
 async function ensureNo(){
   const held = state.nums[state.dept];
   if(held && !held.sent) return held;
@@ -485,6 +503,10 @@ async function ensureNo(){
   let rec = null;
   if(db){
     try{ const n = await nextSharedNo(db); rec = {no:`OTF-${pad(n)}`, n, shared:true, sent:false} }catch(e){ console.warn("shared counter failed", e) }
+  }
+  if(!rec && useSheet()){
+    try{ const r = await sheetCall({action:"number"}); rec = {no:r.no, n:parseInt(String(r.no).slice(-4),10), shared:false, sheet:true, sent:false} }
+    catch(e){ console.warn("sheet number failed", e) }
   }
   if(!rec){
     const n = (parseInt(store.get("otf.localSeq")||"0",10)||0) + 1; store.set("otf.localSeq", String(n));
@@ -494,6 +516,14 @@ async function ensureNo(){
   return rec;
 }
 async function logOrder(o){
+  const held0 = state.nums[state.dept];
+  if(useSheet() && held0){
+    const body = {action:"order", order:{no:o.no, chef:o.chef[0], chefAr:o.chef[1], deptName:o.d.en, deptAr:o.d.ar, date:o.date,
+      priority:o.prio, neededBy:o.when.en, neededByAr:o.when.ar, notes:o.notes,
+      items:o.rows.map(r=>({id:r.it.id, item:r.it.en, itemAr:r.it.ar, qty:r.q, unit:r.it.u, unitAr:UNITS[r.it.u].ar}))}};
+    window.__lastLog = (async()=>{ try{ await flushPending(); await sheetCall(body) }catch(e){ queuePending(body) } })();
+    await window.__lastLog; return;
+  }
   const db = await getDb(); const held = state.nums[state.dept];
   if(!db || !held || !held.shared) return;
   try{
@@ -586,7 +616,7 @@ async function makePdf(){
     state.pdf = await buildPdf(); state.pdf.dept = state.dept;
     logOrder(state.pdf.o);
     $("rvNo").textContent = state.pdf.o.no; $("rvChef").textContent = "· " + (state.lang==="ar" ? state.pdf.o.chef[1] : state.pdf.o.chef[0]);
-    $("rvLocal").hidden = state.nums[state.dept].shared;
+    $("rvLocal").hidden = !!(state.nums[state.dept].shared || state.nums[state.dept].sheet);
     $("thumbs").innerHTML = state.pdf.imgs.map((s,i)=>`<img src="${s}" alt="PDF page ${i+1}">`).join("");
     $("waBtn").href = `https://wa.me/${phoneIntl($("phone").value)}?text=${encodeURIComponent(waText(state.pdf.o))}`;
     $("saveStatus").hidden = true;
@@ -597,6 +627,7 @@ async function makePdf(){
 function markSent(){
   const d = state.pdf ? state.pdf.dept : state.dept;
   const held = state.nums[d];
+  if(held && useSheet()){ const body = {action:"sent", no:held.no}; Promise.resolve(window.__lastLog).then(()=>sheetCall(body)).catch(()=>queuePending(body)) }
   if(held && held.shared){ getDb().then(db=>{ if(db) db.doc("orders/"+pad(held.n)).update({status:"sent", sentAt:new Date().toISOString()}).catch(()=>{}) }) }
   state.carts[d] = []; state.nums[d] = null; saveNums(); persist();
   $("notes").value = ""; state.prio = "normal";
@@ -662,6 +693,7 @@ $("phone").value = store.get("otf.phone") || "";
 $("date").value = new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
 
 applyLang();
+flushPending();
 </script>
 
 </body>
